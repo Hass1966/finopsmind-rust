@@ -1,0 +1,33 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+database:
+  host: "localhost"
+  port: 5434
+  user: "hassan"
+  password: "finops123"
+  name: "finopsmind"
+  max_connections: 10
+
+redis:
+  url: "redis://localhost:6379"
+
+auth:
+  jwt_secret: "super-secret-jwt-key-change-in-production"
+  token_expiry_hours: 24
+
+encryption_key: "finopsmind-encryption-key-32bytes!"
+
+llm:
+  provider: "ollama"
+  url: "http://localhost:11434/api/chat"
+  model: "llama3.1"
+  api_key: ""
+
+jobs:
+  cost_sync_interval_secs: 21600
+  anomaly_detect_interval_secs: 86400
+  forecast_interval_secs: 86400
+  budget_check_interval_secs: 3600
+  recommendation_interval_secs: 86400
