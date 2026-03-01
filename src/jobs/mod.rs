@@ -5,16 +5,32 @@ use uuid::Uuid;
 use chrono::{Utc, NaiveDate};
 
 use crate::config::JobsConfig;
-use crate::db::{CostRepo, BudgetRepo, AnomalyRepo, ForecastRepo};
+use crate::db::{CostRepo, BudgetRepo, AnomalyRepo, ForecastRepo, CloudProviderRepo};
 use crate::ml;
-use crate::models::{Anomaly, Forecast, ForecastPoint};
+use crate::models::{Anomaly, Forecast, ForecastPoint, CostRecord, AwsCredentials, AzureCredentials};
 use crate::ws::WsHub;
 
 pub fn spawn_background_jobs(
     pool: PgPool,
     config: JobsConfig,
     ws_hub: WsHub,
+    encryption_key: String,
 ) {
+    // Cost sync job
+    let pool0 = pool.clone();
+    let ws0 = ws_hub.clone();
+    let enc_key = encryption_key.clone();
+    tokio::spawn(async move {
+        let mut ticker = interval(Duration::from_secs(config.cost_sync_interval_secs));
+        loop {
+            ticker.tick().await;
+            info!("Running cost sync job");
+            if let Err(e) = run_cost_sync(&pool0, &ws0, &enc_key).await {
+                error!("Cost sync job failed: {e}");
+            }
+        }
+    });
+
     let pool1 = pool.clone();
     let ws1 = ws_hub.clone();
     tokio::spawn(async move {
@@ -54,6 +70,109 @@ pub fn spawn_background_jobs(
     });
 
     info!("Background jobs started");
+}
+
+/// Sync cost data from all enabled cloud providers.
+async fn run_cost_sync(pool: &PgPool, ws_hub: &WsHub, encryption_key: &str) -> anyhow::Result<()> {
+    let providers = CloudProviderRepo::get_all_enabled(pool).await?;
+    let end_date = Utc::now().date_naive();
+    let start_date = end_date - chrono::Duration::days(7); // Sync last 7 days
+
+    for provider in providers {
+        let creds_enc = match &provider.credentials {
+            Some(c) => c,
+            None => continue,
+        };
+
+        let creds_bytes = match crate::crypto::decrypt(creds_enc, encryption_key) {
+            Ok(b) => b,
+            Err(e) => {
+                error!(provider_id = %provider.id, "Failed to decrypt credentials: {e}");
+                continue;
+            }
+        };
+
+        let creds_json: serde_json::Value = match serde_json::from_slice(&creds_bytes) {
+            Ok(v) => v,
+            Err(e) => {
+                error!(provider_id = %provider.id, "Failed to parse credentials: {e}");
+                continue;
+            }
+        };
+
+        let cost_items = match provider.provider_type.as_str() {
+            "aws" => {
+                let aws_creds: AwsCredentials = match serde_json::from_value(creds_json) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        error!(provider_id = %provider.id, "Invalid AWS creds: {e}");
+                        continue;
+                    }
+                };
+                let account = aws_creds.access_key_id.clone();
+                match crate::cloud::aws::sync_costs(&aws_creds, start_date, end_date, &account).await {
+                    Ok(items) => items,
+                    Err(e) => {
+                        error!(provider_id = %provider.id, "AWS sync error: {e}");
+                        CloudProviderRepo::update_status(pool, provider.id, "failed", Some(&e.to_string())).await.ok();
+                        continue;
+                    }
+                }
+            }
+            "azure" => {
+                let azure_creds: AzureCredentials = match serde_json::from_value(creds_json) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        error!(provider_id = %provider.id, "Invalid Azure creds: {e}");
+                        continue;
+                    }
+                };
+                match crate::cloud::azure::sync_costs(&azure_creds, start_date, end_date).await {
+                    Ok(items) => items,
+                    Err(e) => {
+                        error!(provider_id = %provider.id, "Azure sync error: {e}");
+                        CloudProviderRepo::update_status(pool, provider.id, "failed", Some(&e.to_string())).await.ok();
+                        continue;
+                    }
+                }
+            }
+            _ => continue,
+        };
+
+        let records: Vec<CostRecord> = cost_items
+            .into_iter()
+            .map(|item| CostRecord {
+                id: Uuid::new_v4(),
+                organization_id: provider.organization_id,
+                date: item.date,
+                amount: rust_decimal::Decimal::from_f64_retain(item.amount).unwrap_or_default(),
+                currency: item.currency,
+                provider: provider.provider_type.clone(),
+                service: item.service,
+                account_id: item.account_id,
+                region: item.region,
+                resource_id: item.resource_id,
+                tags: item.tags,
+                estimated: item.estimated,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            })
+            .collect();
+
+        let count = records.len();
+        if !records.is_empty() {
+            CostRepo::create_batch(pool, &records).await?;
+            CloudProviderRepo::update_sync_time(pool, provider.id).await?;
+            info!(provider_id = %provider.id, count, "Synced cost data");
+
+            ws_hub.send_cost_update(provider.organization_id, serde_json::json!({
+                "provider": provider.provider_type,
+                "records_synced": count,
+            })).await;
+        }
+    }
+
+    Ok(())
 }
 
 async fn run_anomaly_detection(pool: &PgPool, ws_hub: &WsHub) -> anyhow::Result<()> {
@@ -186,7 +305,6 @@ async fn run_budget_check(pool: &PgPool, ws_hub: &WsHub) -> anyhow::Result<()> {
     let now = Utc::now().date_naive();
 
     for budget in budgets {
-        // Determine period dates
         let (period_start, period_end) = match budget.period.as_str() {
             "monthly" => {
                 let start = NaiveDate::from_ymd_opt(now.year(), now.month(), 1).unwrap_or(now);

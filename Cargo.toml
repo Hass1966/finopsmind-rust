@@ -65,3 +65,11 @@ base64 = "0.22"
 
 # Config
 config = "0.14"
+
+# AWS SDK
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-costexplorer = "1"
+aws-credential-types = "1"
+
+# Azure
+reqwest-middleware = "0.4"

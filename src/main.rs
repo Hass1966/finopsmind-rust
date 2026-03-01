@@ -10,6 +10,8 @@ mod handlers;
 mod jobs;
 mod ws;
 mod crypto;
+mod cloud;
+mod cache;
 
 use std::sync::Arc;
 use axum::{
@@ -53,6 +55,11 @@ async fn main() -> anyhow::Result<()> {
         .await?;
     tracing::info!("Database migrations applied");
 
+    // Connect to Redis
+    let redis_client = redis::Client::open(config.redis.url.as_str())?;
+    let redis = redis::aio::ConnectionManager::new(redis_client).await?;
+    tracing::info!("Connected to Redis");
+
     // Initialize JWT manager
     let jwt = Arc::new(JwtManager::new(&config.auth.jwt_secret, config.auth.token_expiry_hours));
 
@@ -62,6 +69,7 @@ async fn main() -> anyhow::Result<()> {
     // Create shared state
     let state = AppState {
         pool: pool.clone(),
+        redis: redis.clone(),
         jwt: jwt.clone(),
         ws_hub: ws_hub.clone(),
         llm_config: config.llm.clone(),
@@ -74,7 +82,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Spawn background jobs
-    jobs::spawn_background_jobs(pool.clone(), config.jobs.clone(), ws_hub.clone());
+    jobs::spawn_background_jobs(pool.clone(), config.jobs.clone(), ws_hub.clone(), config.encryption_key.clone());
 
     // CORS configuration
     let cors = CorsLayer::new()

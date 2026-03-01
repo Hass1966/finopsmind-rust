@@ -16,6 +16,7 @@ pub mod allocations;
 
 use std::sync::Arc;
 use crate::auth::jwt::JwtManager;
+use crate::cache::RedisPool;
 use crate::config::LlmConfig;
 use crate::ws::WsHub;
 
@@ -23,6 +24,7 @@ use crate::ws::WsHub;
 #[derive(Clone)]
 pub struct AppState {
     pub pool: sqlx::PgPool,
+    pub redis: RedisPool,
     pub jwt: Arc<JwtManager>,
     pub ws_hub: WsHub,
     pub llm_config: LlmConfig,
