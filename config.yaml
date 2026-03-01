@@ -22,7 +22,7 @@ encryption_key: "finopsmind-encryption-key-32bytes!"
 llm:
   provider: "ollama"
   url: "http://localhost:11434/api/chat"
-  model: "llama3.1"
+  model: "llama3.1:8b"
   api_key: ""
 
 jobs:

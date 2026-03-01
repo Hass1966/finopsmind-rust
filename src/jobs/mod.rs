@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use sqlx::PgPool;
 use tokio::time::{interval, Duration};
 use tracing::{info, error};

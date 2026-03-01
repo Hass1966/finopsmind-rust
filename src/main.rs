@@ -14,7 +14,7 @@ mod crypto;
 use std::sync::Arc;
 use axum::{
     middleware,
-    routing::{delete, get, post, put, patch},
+    routing::{get, post, put, patch},
     Router,
 };
 use sqlx::postgres::PgPoolOptions;

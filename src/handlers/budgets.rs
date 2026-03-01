@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::auth::Claims;
 use crate::db::BudgetRepo;
 use crate::errors::AppError;
-use crate::models::{Budget, BudgetSummary, CreateBudgetRequest, UpdateBudgetRequest};
+use crate::models::{Budget, CreateBudgetRequest, UpdateBudgetRequest};
 use crate::handlers::AppState;
 
 pub async fn list(

@@ -19,7 +19,7 @@ pub fn generate_forecast(data: &[f64], horizon: usize) -> Result<ForecastResult,
         return Err("Need at least 7 data points for forecasting".into());
     }
 
-    let mut ets = AutoETS::non_seasonal();
+    let ets = AutoETS::non_seasonal();
 
     let model = ets.fit(data).map_err(|e| format!("ETS fit error: {e}"))?;
     let forecast = model.predict(horizon, 0.95).map_err(|e| format!("ETS predict error: {e}"))?;

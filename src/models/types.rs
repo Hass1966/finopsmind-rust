@@ -1,7 +1,4 @@
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
-use uuid::Uuid;
-use chrono::{DateTime, Utc, NaiveDate};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, sqlx::Type)]

@@ -1,7 +1,7 @@
 use axum::{extract::State, Extension, Json};
 use serde_json::json;
 
-use crate::auth::{Claims, generate_api_key, JwtManager};
+use crate::auth::{Claims, generate_api_key};
 use crate::db::{OrgRepo, UserRepo};
 use crate::errors::AppError;
 use crate::models::{ApiKeyResponse, LoginRequest, SignupRequest, TokenResponse, UserInfo};
