@@ -76,6 +76,18 @@ impl RuleEngine for UnattachedEbsRule {
                 .map(|dt| dt.format("%Y-%m-%d").to_string())
                 .unwrap_or_default();
 
+            let terraform_code = format!(
+                r#"# Delete unattached EBS volume: {vol_id} ({vol_type}, {size_gb} GB)
+# Create a snapshot first if the data may be needed:
+# aws ec2 create-snapshot --volume-id {vol_id} --description "Backup before deletion"
+
+# If managed by Terraform, remove the resource block:
+# resource "aws_ebs_volume" "this" {{ }}
+
+# Or use AWS CLI:
+# aws ec2 delete-volume --volume-id {vol_id}"#
+            );
+
             recommendations.push(NewRecommendation {
                 rec_type: "unused_resource".into(),
                 provider: "aws".into(),
@@ -107,6 +119,7 @@ impl RuleEngine for UnattachedEbsRule {
                     "low".into()
                 },
                 details: serde_json::json!({}),
+                terraform_code: Some(terraform_code),
             });
         }
 

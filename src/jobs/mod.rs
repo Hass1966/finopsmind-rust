@@ -6,7 +6,7 @@ use tracing::{info, error};
 use uuid::Uuid;
 use chrono::{Utc, NaiveDate};
 
-use crate::config::JobsConfig;
+use crate::config::{JobsConfig, LlmConfig};
 use crate::db::{CostRepo, BudgetRepo, AnomalyRepo, ForecastRepo, CloudProviderRepo};
 use crate::ml;
 use crate::models::{Anomaly, Forecast, ForecastPoint, CostRecord, AwsCredentials, AzureCredentials};
@@ -17,6 +17,7 @@ pub fn spawn_background_jobs(
     config: JobsConfig,
     ws_hub: WsHub,
     encryption_key: String,
+    llm_config: LlmConfig,
 ) {
     // Cost sync job
     let pool0 = pool.clone();
@@ -35,12 +36,13 @@ pub fn spawn_background_jobs(
 
     let pool1 = pool.clone();
     let ws1 = ws_hub.clone();
+    let llm1 = llm_config;
     tokio::spawn(async move {
         let mut ticker = interval(Duration::from_secs(config.anomaly_detect_interval_secs));
         loop {
             ticker.tick().await;
             info!("Running anomaly detection job");
-            if let Err(e) = run_anomaly_detection(&pool1, &ws1).await {
+            if let Err(e) = run_anomaly_detection(&pool1, &ws1, &llm1).await {
                 error!("Anomaly detection job failed: {e}");
             }
         }
@@ -192,7 +194,7 @@ async fn run_cost_sync(pool: &PgPool, ws_hub: &WsHub, encryption_key: &str) -> a
     Ok(())
 }
 
-async fn run_anomaly_detection(pool: &PgPool, ws_hub: &WsHub) -> anyhow::Result<()> {
+async fn run_anomaly_detection(pool: &PgPool, ws_hub: &WsHub, llm_config: &LlmConfig) -> anyhow::Result<()> {
     let orgs = crate::db::OrgRepo::list(pool).await?;
 
     for org in orgs {
@@ -243,7 +245,94 @@ async fn run_anomaly_detection(pool: &PgPool, ws_hub: &WsHub) -> anyhow::Result<
             AnomalyRepo::create_batch(pool, &new_anomalies).await?;
             info!(org_id = %org.id, count = new_anomalies.len(), "Detected anomalies");
 
+            // LLM root cause analysis for HIGH and CRITICAL anomalies (max 5 per run)
+            let mut llm_calls = 0;
+            const MAX_LLM_CALLS: usize = 5;
+
+            // Gather context for LLM: 7-day cost trend and service breakdown
+            let trend_start = end - chrono::Duration::days(7);
+            let trend_data = CostRepo::get_daily_totals(pool, org.id, trend_start, end).await.unwrap_or_default();
+            let trend_summary: String = trend_data.iter()
+                .map(|(d, v)| format!("  {d}: ${v:.2}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            let breakdown = CostRepo::get_breakdown(pool, org.id, trend_start, end, "service").await.ok();
+            let service_summary = breakdown.map(|b| {
+                b.items.iter().take(10)
+                    .map(|i| format!("  - {}: ${:.2} ({:.1}%)", i.name, i.amount, i.percentage))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }).unwrap_or_else(|| "Service breakdown unavailable.".into());
+
             for a in &new_anomalies {
+                if llm_calls >= MAX_LLM_CALLS {
+                    break;
+                }
+
+                if a.severity != "high" && a.severity != "critical" {
+                    continue;
+                }
+
+                llm_calls += 1;
+
+                let system_prompt = "You are a FinOps cloud cost analyst. Analyze the anomaly data and provide a concise root cause analysis. \
+                    Focus on likely causes based on the spending pattern, affected date, deviation amount, and service breakdown. \
+                    Be specific and actionable. Keep your response under 200 words.";
+
+                let user_message = format!(
+                    "Anomaly detected on {date}:\n\
+                     - Actual spend: ${actual}\n\
+                     - Expected spend: ${expected}\n\
+                     - Deviation: {deviation_pct}%\n\
+                     - Severity: {severity}\n\n\
+                     7-day cost trend:\n{trend}\n\n\
+                     Service breakdown (last 7 days):\n{services}\n\n\
+                     What is the most likely root cause of this cost anomaly?",
+                    date = a.date,
+                    actual = a.actual_amount,
+                    expected = a.expected_amount,
+                    deviation_pct = a.deviation_pct,
+                    severity = a.severity,
+                    trend = trend_summary,
+                    services = service_summary,
+                );
+
+                match crate::llm::call_llm(llm_config, system_prompt, &user_message).await {
+                    Ok(root_cause) => {
+                        // Update the anomaly with the root cause
+                        let update_req = crate::models::UpdateAnomalyRequest {
+                            status: None,
+                            notes: None,
+                            root_cause: Some(root_cause.clone()),
+                        };
+                        if let Err(e) = AnomalyRepo::update(pool, org.id, a.id, &update_req).await {
+                            error!(anomaly_id = %a.id, error = %e, "Failed to update anomaly root cause");
+                        } else {
+                            info!(anomaly_id = %a.id, "LLM root cause analysis stored");
+                        }
+                    }
+                    Err(e) => {
+                        error!(anomaly_id = %a.id, error = %e, "LLM root cause analysis failed");
+                        // Don't fail the job, just log and continue
+                    }
+                }
+
+                // Send WebSocket alert (after potential LLM enrichment)
+                ws_hub.send_anomaly_alert(org.id, serde_json::json!({
+                    "severity": a.severity,
+                    "date": a.date.to_string(),
+                    "actual": a.actual_amount.to_string(),
+                    "expected": a.expected_amount.to_string(),
+                })).await;
+            }
+
+            // Send WebSocket alerts for remaining high/critical anomalies not processed by LLM
+            for a in &new_anomalies {
+                if (a.severity == "high" || a.severity == "critical") && llm_calls <= MAX_LLM_CALLS {
+                    // Already handled above
+                    continue;
+                }
                 if a.severity == "high" || a.severity == "critical" {
                     ws_hub.send_anomaly_alert(org.id, serde_json::json!({
                         "severity": a.severity,

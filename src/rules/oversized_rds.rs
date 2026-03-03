@@ -115,6 +115,22 @@ impl RuleEngine for OversizedRdsRule {
             let multi_az = db.multi_az();
             let storage = db.allocated_storage().unwrap_or(0);
 
+            let terraform_code = format!(
+                r#"# Downsize RDS instance: {db_id}
+# From {db_class} to {smaller} (avg CPU: {avg_cpu:.2}%)
+resource "aws_db_instance" "{db_id}" {{
+  instance_class = "{smaller}"
+  # Apply during maintenance window to minimize downtime
+  apply_immediately = false
+}}
+
+# Or use AWS CLI:
+# aws rds modify-db-instance \
+#   --db-instance-identifier {db_id} \
+#   --db-instance-class {smaller} \
+#   --apply-immediately"#
+            );
+
             recommendations.push(NewRecommendation {
                 rec_type: "rightsizing".into(),
                 provider: "aws".into(),
@@ -146,6 +162,7 @@ impl RuleEngine for OversizedRdsRule {
                     "medium".into()
                 },
                 details: serde_json::json!({}),
+                terraform_code: Some(terraform_code),
             });
         }
 

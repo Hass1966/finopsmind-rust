@@ -6,8 +6,16 @@ use uuid::Uuid;
 use crate::db::{CloudProviderRepo, RecommendationRepo};
 use crate::models::{AwsCredentials, Recommendation};
 use crate::rules::{
-    build_aws_config, idle_ec2::IdleEc2Rule, old_snapshots::OldSnapshotsRule,
-    oversized_rds::OversizedRdsRule, unattached_ebs::UnattachedEbsRule, NewRecommendation,
+    build_aws_config,
+    idle_ec2::IdleEc2Rule,
+    old_snapshots::OldSnapshotsRule,
+    oversized_rds::OversizedRdsRule,
+    unattached_ebs::UnattachedEbsRule,
+    idle_elb::IdleElbRule,
+    missing_ri::MissingRiRule,
+    s3_lifecycle::S3LifecycleRule,
+    idle_eip::IdleEipRule,
+    NewRecommendation,
     RuleEngine,
 };
 
@@ -51,6 +59,10 @@ pub async fn run_recommendation_scan(pool: &PgPool, encryption_key: &str) -> any
             ("oversized-rds", Box::new(OversizedRdsRule)),
             ("unattached-ebs", Box::new(UnattachedEbsRule)),
             ("old-snapshots", Box::new(OldSnapshotsRule)),
+            ("idle-elb", Box::new(IdleElbRule)),
+            ("missing-ri", Box::new(MissingRiRule)),
+            ("s3-lifecycle", Box::new(S3LifecycleRule)),
+            ("idle-eip", Box::new(IdleEipRule)),
         ];
 
         let mut all_new: Vec<NewRecommendation> = Vec::new();
@@ -139,7 +151,7 @@ fn new_to_recommendation(nr: NewRecommendation, org_id: Uuid) -> Recommendation 
         implemented_at: None,
         rule_id: Some(nr.rule_id),
         confidence: Some("high".into()),
-        terraform_code: None,
+        terraform_code: nr.terraform_code,
         resource_metadata: serde_json::json!({}),
         resource_arn: None,
         expires_at: None,

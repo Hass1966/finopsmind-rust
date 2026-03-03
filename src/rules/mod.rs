@@ -2,6 +2,10 @@ pub mod idle_ec2;
 pub mod oversized_rds;
 pub mod unattached_ebs;
 pub mod old_snapshots;
+pub mod idle_elb;
+pub mod missing_ri;
+pub mod s3_lifecycle;
+pub mod idle_eip;
 
 use std::future::Future;
 use std::pin::Pin;
@@ -32,6 +36,7 @@ pub struct NewRecommendation {
     pub rule_id: String,
     pub severity: String,
     pub details: serde_json::Value,
+    pub terraform_code: Option<String>,
 }
 
 /// Trait implemented by each recommendation rule.
@@ -105,6 +110,43 @@ pub async fn get_avg_cpu(
     }
 
     Ok(Some(sum / count as f64))
+}
+
+/// Get the total Sum of a CloudWatch metric over the last N days.
+pub async fn get_metric_sum(
+    cw_client: &aws_sdk_cloudwatch::Client,
+    namespace: &str,
+    metric_name: &str,
+    dimension_name: &str,
+    dimension_value: &str,
+    days: i64,
+) -> anyhow::Result<f64> {
+    let end = Utc::now();
+    let start = end - chrono::Duration::days(days);
+
+    let resp = cw_client
+        .get_metric_statistics()
+        .namespace(namespace)
+        .metric_name(metric_name)
+        .dimensions(
+            aws_sdk_cloudwatch::types::Dimension::builder()
+                .name(dimension_name)
+                .value(dimension_value)
+                .build(),
+        )
+        .start_time(aws_sdk_cloudwatch::primitives::DateTime::from_millis(
+            start.timestamp_millis(),
+        ))
+        .end_time(aws_sdk_cloudwatch::primitives::DateTime::from_millis(
+            end.timestamp_millis(),
+        ))
+        .period(86400)
+        .statistics(aws_sdk_cloudwatch::types::Statistic::Sum)
+        .send()
+        .await?;
+
+    let total: f64 = resp.datapoints().iter().filter_map(|dp| dp.sum()).sum();
+    Ok(total)
 }
 
 /// Check whether a DateTime is older than `days` from now.

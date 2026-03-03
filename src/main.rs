@@ -10,6 +10,7 @@ mod rules;
 mod ws;
 mod crypto;
 mod cloud;
+mod llm;
 mod cache;
 
 use std::sync::Arc;
@@ -81,7 +82,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Spawn background jobs
-    jobs::spawn_background_jobs(pool.clone(), config.jobs.clone(), ws_hub.clone(), config.encryption_key.clone());
+    jobs::spawn_background_jobs(pool.clone(), config.jobs.clone(), ws_hub.clone(), config.encryption_key.clone(), config.llm.clone());
 
     // CORS configuration
     let cors = CorsLayer::new()

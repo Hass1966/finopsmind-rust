@@ -117,6 +117,19 @@ impl RuleEngine for IdleEc2Rule {
                     .unwrap_or("")
                     .to_string();
 
+                let terraform_code = format!(
+                    r#"# Terminate idle EC2 instance: {instance_id} ({instance_type})
+# Average CPU: {avg_cpu:.2}% over {LOOKBACK_DAYS} days
+# WARNING: Create an AMI backup before terminating if needed
+
+# If managed by Terraform, remove the resource block:
+# resource "aws_instance" "this" {{ }}
+
+# Or use AWS CLI:
+# aws ec2 stop-instances --instance-ids {instance_id}
+# aws ec2 terminate-instances --instance-ids {instance_id}"#
+                );
+
                 recommendations.push(NewRecommendation {
                     rec_type: "idle_resource".into(),
                     provider: "aws".into(),
@@ -146,6 +159,7 @@ impl RuleEngine for IdleEc2Rule {
                         "medium".into()
                     },
                     details: serde_json::json!({}),
+                    terraform_code: Some(terraform_code),
                 });
             }
         }

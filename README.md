@@ -5,7 +5,7 @@ Cloud financial operations intelligence platform built with Rust. FinOpsMind agg
 ## Features
 
 - **Multi-Cloud Cost Tracking** — Ingest and normalize cost data from AWS, Azure, and GCP
-- **Anomaly Detection** — Z-score based detection with configurable sensitivity over rolling windows
+- **Anomaly Detection** — Z-score based detection with configurable sensitivity and AI-powered root cause analysis
 - **Cost Forecasting** — ETS (Exponential Smoothing) time-series models via the augurs crate
 - **Budget Management** — Create budgets with thresholds and get real-time alerts when spending exceeds limits
 - **Optimization Recommendations** — AI-generated recommendations with estimated savings and Terraform code
@@ -191,14 +191,100 @@ PostgreSQL and Redis are bound to `127.0.0.1` by default and are not exposed to 
 
 ## Background Jobs
 
-The application runs four background jobs:
+The application runs five background jobs:
 
 | Job | Default Interval | Description |
 |-----|-----------------|-------------|
 | Cost Sync | 6 hours | Pulls cost data from configured cloud providers |
-| Anomaly Detection | 24 hours | Detects spending anomalies using z-score analysis |
+| Anomaly Detection | 24 hours | Detects spending anomalies using z-score analysis; enriches HIGH/CRITICAL with LLM root cause analysis (max 5 per run) |
 | Forecasting | 24 hours | Generates ETS cost forecasts per service |
 | Budget Check | 1 hour | Evaluates budgets against current and forecasted spend |
+| Recommendation Scan | 24 hours | Runs 8 cost optimization rules across all AWS providers |
+
+## Recommendation Rules
+
+| Rule | ID | Description |
+|------|----|-------------|
+| Idle EC2 | `idle-ec2` | Instances with avg CPU < 5% over 7 days |
+| Oversized RDS | `oversized-rds` | RDS instances with avg CPU < 10% over 7 days |
+| Unattached EBS | `unattached-ebs` | EBS volumes in `available` state |
+| Old Snapshots | `old-snapshots` | EBS snapshots older than 90 days |
+| Idle ELB | `idle-elb` | Load balancers with zero healthy targets or < 100 requests/day |
+| Missing RI | `missing-ri` | On-demand EC2 instances running 30+ days without reserved instance coverage |
+| S3 Lifecycle | `s3-lifecycle` | S3 buckets without lifecycle rules configured |
+| Idle EIP | `idle-eip` | Elastic IPs not associated with a running instance ($3.65/mo each) |
+
+Each rule generates Terraform code snippets for remediation.
+
+## AWS IAM Permissions
+
+The following IAM policy grants the minimum permissions required for all recommendation rules and cost syncing:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CostExplorer",
+      "Effect": "Allow",
+      "Action": [
+        "ce:GetCostAndUsage",
+        "ce:GetCostForecast"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "EC2ReadOnly",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeInstances",
+        "ec2:DescribeVolumes",
+        "ec2:DescribeSnapshots",
+        "ec2:DescribeAddresses",
+        "ec2:DescribeReservedInstances",
+        "ec2:DescribeImages"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "RDSReadOnly",
+      "Effect": "Allow",
+      "Action": [
+        "rds:DescribeDBInstances"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CloudWatchMetrics",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:GetMetricStatistics",
+        "cloudwatch:ListMetrics"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ELBReadOnly",
+      "Effect": "Allow",
+      "Action": [
+        "elasticloadbalancing:DescribeLoadBalancers",
+        "elasticloadbalancing:DescribeTargetGroups",
+        "elasticloadbalancing:DescribeTargetHealth"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "S3ReadOnly",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListAllMyBuckets",
+        "s3:GetLifecycleConfiguration"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
 
 ## License
 

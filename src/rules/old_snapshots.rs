@@ -76,6 +76,18 @@ impl RuleEngine for OldSnapshotsRule {
                     .unwrap_or("")
                     .to_string();
 
+                let terraform_code = format!(
+                    r#"# Delete old EBS snapshot: {snap_id} ({age_days} days old, {size_gb} GB)
+# Verify no AMIs depend on this snapshot before deleting:
+# aws ec2 describe-images --filters "Name=block-device-mapping.snapshot-id,Values={snap_id}"
+
+# If managed by Terraform, remove the resource block:
+# resource "aws_ebs_snapshot" "this" {{ }}
+
+# Or use AWS CLI:
+# aws ec2 delete-snapshot --snapshot-id {snap_id}"#
+                );
+
                 recommendations.push(NewRecommendation {
                     rec_type: "unused_resource".into(),
                     provider: "aws".into(),
@@ -103,6 +115,7 @@ impl RuleEngine for OldSnapshotsRule {
                     rule_id: "old-snapshots".into(),
                     severity: "low".into(),
                     details: serde_json::json!({}),
+                    terraform_code: Some(terraform_code),
                 });
             }
 
