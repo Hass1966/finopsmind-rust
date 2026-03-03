@@ -1,12 +1,24 @@
-use axum::{extract::State, Extension, Json};
+use std::convert::Infallible;
+use std::sync::Arc;
+
+use axum::extract::{Query, State};
+use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::response::{IntoResponse, Response};
+use axum::{Extension, Json};
 use chrono::{Duration, Utc};
+use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 
 use crate::auth::Claims;
 use crate::config::LlmConfig;
-use crate::db::{AnomalyRepo, BudgetRepo, CostRepo, ForecastRepo, RecommendationRepo};
+use crate::db::{
+    AnomalyRepo, BudgetRepo, ChatMessageRepo, CostRepo, ForecastRepo, RecommendationRepo,
+};
 use crate::errors::AppError;
 use crate::handlers::AppState;
+use crate::llm::LlmMessage;
+use crate::models::{ChatHistoryParams, ChatMessage, PaginatedResponse, Pagination};
 
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
@@ -14,6 +26,8 @@ pub struct ChatRequest {
     pub message: String,
     #[serde(default)]
     pub context: Option<serde_json::Value>,
+    #[serde(default)]
+    pub stream: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -39,52 +53,210 @@ pub async fn chat(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Json(chat_req): Json<ChatRequest>,
-) -> Result<Json<ChatResponse>, AppError> {
+) -> Result<Response, AppError> {
     let intent = detect_intent(&chat_req.message);
+
+    // Fetch conversation history (last 10 messages)
+    let history_msgs = ChatMessageRepo::get_recent(&state.pool, claims.sub, 10)
+        .await
+        .unwrap_or_default();
+    let llm_history: Vec<LlmMessage> = history_msgs
+        .iter()
+        .map(|m| LlmMessage {
+            role: m.role.clone(),
+            content: m.content.clone(),
+        })
+        .collect();
 
     // Gather real data from the database based on intent
     let ctx = gather_context(&state, claims.org_id, &intent).await;
-
     let system_prompt = build_system_prompt(&ctx, &intent);
 
-    let response = call_llm(&state.llm_config, &system_prompt, &chat_req.message).await?;
+    // Save user message
+    let _ = ChatMessageRepo::create(
+        &state.pool,
+        claims.org_id,
+        claims.sub,
+        "user",
+        &chat_req.message,
+        None,
+    )
+    .await;
 
-    Ok(Json(ChatResponse {
-        response,
-        intent,
-        data: None,
+    let is_anthropic = state.llm_config.provider == "anthropic";
+
+    if chat_req.stream && is_anthropic {
+        // Streaming path (Anthropic only)
+        let text_stream = crate::llm::call_llm_stream(
+            &state.llm_config,
+            &system_prompt,
+            &llm_history,
+            &chat_req.message,
+        )
+        .await
+        .map_err(|e| AppError::service_unavailable(&e.to_string()))?;
+
+        let pool = state.pool.clone();
+        let org_id = claims.org_id;
+        let user_id = claims.sub;
+        let intent_clone = intent.clone();
+        let full_response = Arc::new(Mutex::new(String::new()));
+        let full_response_for_done = full_response.clone();
+
+        let chunk_stream = text_stream.map(move |chunk_result| {
+            let fr = full_response.clone();
+            match chunk_result {
+                Ok(text) => {
+                    // Accumulate full text for DB save
+                    if let Ok(mut guard) = fr.try_lock() {
+                        guard.push_str(&text);
+                    }
+                    Ok::<_, Infallible>(
+                        Event::default().data(
+                            serde_json::json!({"type": "chunk", "text": text}).to_string(),
+                        ),
+                    )
+                }
+                Err(e) => Ok(Event::default().data(
+                    serde_json::json!({"type": "error", "message": e.to_string()}).to_string(),
+                )),
+            }
+        });
+
+        // Chain a final "done" event that also persists the assistant message
+        let done_event = stream::once(async move {
+            let full_text = full_response_for_done.lock().await.clone();
+            let _ = ChatMessageRepo::create(
+                &pool,
+                org_id,
+                user_id,
+                "assistant",
+                &full_text,
+                Some(&intent_clone),
+            )
+            .await;
+            Ok::<_, Infallible>(Event::default().data(
+                serde_json::json!({
+                    "type": "done",
+                    "response": full_text,
+                    "intent": intent_clone
+                })
+                .to_string(),
+            ))
+        });
+
+        let sse_stream = chunk_stream.chain(done_event);
+
+        Ok(Sse::new(sse_stream)
+            .keep_alive(KeepAlive::default())
+            .into_response())
+    } else {
+        // Non-streaming path (Ollama or explicit non-stream)
+        let response = crate::llm::call_llm_with_history(
+            &state.llm_config,
+            &system_prompt,
+            &llm_history,
+            &chat_req.message,
+        )
+        .await
+        .map_err(|e| AppError::service_unavailable(&e.to_string()))?;
+
+        // Save assistant message
+        let _ = ChatMessageRepo::create(
+            &state.pool,
+            claims.org_id,
+            claims.sub,
+            "assistant",
+            &response,
+            Some(&intent),
+        )
+        .await;
+
+        Ok(Json(ChatResponse {
+            response,
+            intent,
+            data: None,
+        })
+        .into_response())
+    }
+}
+
+pub async fn get_history(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Query(params): Query<ChatHistoryParams>,
+) -> Result<Json<PaginatedResponse<ChatMessage>>, AppError> {
+    let page = params.page.unwrap_or(1);
+    let page_size = params.page_size.unwrap_or(20);
+    let offset = (page - 1) * page_size;
+
+    let (messages, total) =
+        ChatMessageRepo::list(&state.pool, claims.sub, page_size, offset).await?;
+
+    Ok(Json(PaginatedResponse {
+        data: messages,
+        pagination: Pagination::new(page, page_size, total),
     }))
+}
+
+pub async fn clear_history(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    ChatMessageRepo::delete_all_for_user(&state.pool, claims.sub).await?;
+    Ok(Json(serde_json::json!({"message": "Chat history cleared"})))
 }
 
 fn detect_intent(message: &str) -> String {
     let msg = message.to_lowercase();
-    if msg.contains("execut") || msg.contains("summary") || msg.contains("overview") || msg.contains("report") {
+    if msg.contains("execut")
+        || msg.contains("summary")
+        || msg.contains("overview")
+        || msg.contains("report")
+    {
         "executive_summary".into()
-    } else if msg.contains("anomal") || msg.contains("spike") || msg.contains("unusual") || msg.contains("surge") || msg.contains("jump") {
+    } else if msg.contains("anomal")
+        || msg.contains("spike")
+        || msg.contains("unusual")
+        || msg.contains("surge")
+        || msg.contains("jump")
+    {
         "anomaly_query".into()
-    } else if msg.contains("sav") || msg.contains("optim") || msg.contains("recommend") || msg.contains("reduc") || msg.contains("cut") {
+    } else if msg.contains("sav")
+        || msg.contains("optim")
+        || msg.contains("recommend")
+        || msg.contains("reduc")
+        || msg.contains("cut")
+    {
         "savings_query".into()
-    } else if msg.contains("forecast") || msg.contains("predict") || msg.contains("project") || msg.contains("next month") {
+    } else if msg.contains("forecast")
+        || msg.contains("predict")
+        || msg.contains("project")
+        || msg.contains("next month")
+    {
         "forecast_query".into()
-    } else if msg.contains("budget") || msg.contains("threshold") || msg.contains("limit") {
+    } else if msg.contains("budget")
+        || msg.contains("threshold")
+        || msg.contains("limit")
+    {
         "budget_query".into()
-    } else if msg.contains("cost") || msg.contains("spend") || msg.contains("bill") || msg.contains("expens") || msg.contains("charg") {
+    } else if msg.contains("cost")
+        || msg.contains("spend")
+        || msg.contains("bill")
+        || msg.contains("expens")
+        || msg.contains("charg")
+    {
         "cost_query".into()
     } else {
         "general".into()
     }
 }
 
-async fn gather_context(
-    state: &AppState,
-    org_id: uuid::Uuid,
-    _intent: &str,
-) -> OrgContext {
+async fn gather_context(state: &AppState, org_id: uuid::Uuid, _intent: &str) -> OrgContext {
     let now = Utc::now().date_naive();
     let days_30_ago = now - Duration::days(30);
     let days_7_ago = now - Duration::days(7);
 
-    // Always fetch cost summary and top services (lightweight, universally useful)
     let cost_summary = match CostRepo::get_summary(&state.pool, org_id, days_30_ago, now).await {
         Ok(s) => format!(
             "Total cost (last 30 days): ${:.2}. Previous period: ${:.2}. Change: {:.1}%.",
@@ -95,37 +267,50 @@ async fn gather_context(
         Err(_) => "Cost data unavailable.".into(),
     };
 
-    let top_services = match CostRepo::get_breakdown(&state.pool, org_id, days_30_ago, now, "service").await {
-        Ok(b) => {
-            let lines: Vec<String> = b.items.iter().take(8).map(|i| {
-                format!("  - {}: ${:.2} ({:.1}%)", i.name, i.amount, i.percentage)
-            }).collect();
-            if lines.is_empty() { "No service breakdown available.".into() }
-            else { format!("Top services by cost:\n{}", lines.join("\n")) }
-        }
-        Err(_) => "Service breakdown unavailable.".into(),
-    };
+    let top_services =
+        match CostRepo::get_breakdown(&state.pool, org_id, days_30_ago, now, "service").await {
+            Ok(b) => {
+                let lines: Vec<String> = b
+                    .items
+                    .iter()
+                    .take(8)
+                    .map(|i| format!("  - {}: ${:.2} ({:.1}%)", i.name, i.amount, i.percentage))
+                    .collect();
+                if lines.is_empty() {
+                    "No service breakdown available.".into()
+                } else {
+                    format!("Top services by cost:\n{}", lines.join("\n"))
+                }
+            }
+            Err(_) => "Service breakdown unavailable.".into(),
+        };
 
-    // Fetch recent daily trend (last 7 days)
-    let cost_trend = match CostRepo::get_trend(&state.pool, org_id, days_7_ago, now, "daily").await {
-        Ok(t) => {
-            let lines: Vec<String> = t.data_points.iter().map(|p| {
-                format!("  {}: ${:.2}", p.date, p.amount)
-            }).collect();
-            if lines.is_empty() { "No recent cost trend data.".into() }
-            else { format!("Daily cost trend (last 7 days):\n{}", lines.join("\n")) }
-        }
-        Err(_) => "Cost trend unavailable.".into(),
-    };
+    let cost_trend =
+        match CostRepo::get_trend(&state.pool, org_id, days_7_ago, now, "daily").await {
+            Ok(t) => {
+                let lines: Vec<String> = t
+                    .data_points
+                    .iter()
+                    .map(|p| format!("  {}: ${:.2}", p.date, p.amount))
+                    .collect();
+                if lines.is_empty() {
+                    "No recent cost trend data.".into()
+                } else {
+                    format!("Daily cost trend (last 7 days):\n{}", lines.join("\n"))
+                }
+            }
+            Err(_) => "Cost trend unavailable.".into(),
+        };
 
-    // Fetch anomalies (always useful context)
     let anomalies = match AnomalyRepo::list(&state.pool, org_id, None, None, 10, 0).await {
         Ok((list, total)) => {
             if list.is_empty() {
                 "No anomalies detected.".into()
             } else {
-                let lines: Vec<String> = list.iter().map(|a| {
-                    format!(
+                let lines: Vec<String> = list
+                    .iter()
+                    .map(|a| {
+                        format!(
                         "  - [{}] {}: actual ${}, expected ${}, deviation {:.1}%, severity: {}, status: {}{}",
                         a.date,
                         if a.service.is_empty() { "overall" } else { &a.service },
@@ -134,35 +319,65 @@ async fn gather_context(
                         a.deviation_pct,
                         a.severity,
                         a.status,
-                        a.root_cause.as_ref().map(|r| format!(", root cause: {r}")).unwrap_or_default(),
+                        a.root_cause
+                            .as_ref()
+                            .map(|r| format!(", root cause: {r}"))
+                            .unwrap_or_default(),
                     )
-                }).collect();
+                    })
+                    .collect();
                 format!("{total} total anomalies. Recent:\n{}", lines.join("\n"))
             }
         }
         Err(_) => "Anomaly data unavailable.".into(),
     };
 
-    // Fetch recommendations
     let recommendations = match RecommendationRepo::get_summary(&state.pool, org_id).await {
         Ok(s) => {
             let mut text = format!(
                 "{} recommendations ({} pending, {} implemented, {} dismissed). Potential savings: ${:.2}. Realized savings: ${:.2}.",
                 s.total_count, s.pending_count, s.implemented_count, s.dismissed_count, s.total_savings, s.implemented_savings
             );
-            // Also get top pending recommendations
-            if let Ok((recs, _)) = RecommendationRepo::list(&state.pool, org_id, Some("pending"), None, None, 5, 0).await {
+            if let Ok((recs, _)) = RecommendationRepo::list(
+                &state.pool,
+                org_id,
+                Some("pending"),
+                None,
+                None,
+                5,
+                0,
+            )
+            .await
+            {
                 if !recs.is_empty() {
-                    let lines: Vec<String> = recs.iter().map(|r| {
-                        format!(
+                    let lines: Vec<String> = recs
+                        .iter()
+                        .map(|r| {
+                            format!(
                             "  - {}: {} {} in {}, save ${}/mo ({:.0}%), risk: {}, effort: {}",
-                            r.rec_type, r.provider,
-                            if r.resource_type.is_empty() { "resource" } else { &r.resource_type },
-                            if r.region.is_empty() { "unknown" } else { &r.region },
-                            r.estimated_savings, r.estimated_savings_pct, r.risk, r.effort
+                            r.rec_type,
+                            r.provider,
+                            if r.resource_type.is_empty() {
+                                "resource"
+                            } else {
+                                &r.resource_type
+                            },
+                            if r.region.is_empty() {
+                                "unknown"
+                            } else {
+                                &r.region
+                            },
+                            r.estimated_savings,
+                            r.estimated_savings_pct,
+                            r.risk,
+                            r.effort
                         )
-                    }).collect();
-                    text.push_str(&format!("\nTop pending recommendations:\n{}", lines.join("\n")));
+                        })
+                        .collect();
+                    text.push_str(&format!(
+                        "\nTop pending recommendations:\n{}",
+                        lines.join("\n")
+                    ));
                 }
             }
             text
@@ -170,42 +385,56 @@ async fn gather_context(
         Err(_) => "Recommendation data unavailable.".into(),
     };
 
-    // Fetch budgets
     let budgets = match BudgetRepo::list(&state.pool, org_id).await {
         Ok(list) => {
             if list.is_empty() {
                 "No budgets configured.".into()
             } else {
-                let lines: Vec<String> = list.iter().map(|b| {
-                    let pct = if b.amount > rust_decimal::Decimal::ZERO {
-                        let spend_f: f64 = b.current_spend.try_into().unwrap_or(0.0);
-                        let amount_f: f64 = b.amount.try_into().unwrap_or(1.0);
-                        (spend_f / amount_f) * 100.0
-                    } else { 0.0 };
-                    format!(
-                        "  - {}: ${} of ${} ({:.1}% used), period: {}, status: {}",
-                        b.name, b.current_spend, b.amount, pct, b.period, b.status
-                    )
-                }).collect();
+                let lines: Vec<String> = list
+                    .iter()
+                    .map(|b| {
+                        let pct = if b.amount > rust_decimal::Decimal::ZERO {
+                            let spend_f: f64 = b.current_spend.try_into().unwrap_or(0.0);
+                            let amount_f: f64 = b.amount.try_into().unwrap_or(1.0);
+                            (spend_f / amount_f) * 100.0
+                        } else {
+                            0.0
+                        };
+                        format!(
+                            "  - {}: ${} of ${} ({:.1}% used), period: {}, status: {}",
+                            b.name, b.current_spend, b.amount, pct, b.period, b.status
+                        )
+                    })
+                    .collect();
                 format!("Budgets:\n{}", lines.join("\n"))
             }
         }
         Err(_) => "Budget data unavailable.".into(),
     };
 
-    // Fetch latest forecast
     let forecast = match ForecastRepo::get_latest(&state.pool, org_id).await {
         Ok(Some(f)) => {
             format!(
                 "Forecast (model {}, confidence {:.0}%): total projected spend ${} over next period. Generated {}.",
-                f.model_version, f.confidence_level, f.total_forecasted, f.generated_at.format("%Y-%m-%d")
+                f.model_version,
+                f.confidence_level,
+                f.total_forecasted,
+                f.generated_at.format("%Y-%m-%d")
             )
         }
         Ok(None) => "No forecast available yet.".into(),
         Err(_) => "Forecast data unavailable.".into(),
     };
 
-    OrgContext { cost_summary, top_services, cost_trend, anomalies, recommendations, budgets, forecast }
+    OrgContext {
+        cost_summary,
+        top_services,
+        cost_trend,
+        anomalies,
+        recommendations,
+        budgets,
+        forecast,
+    }
 }
 
 fn build_system_prompt(ctx: &OrgContext, intent: &str) -> String {
@@ -219,8 +448,13 @@ fn build_system_prompt(ctx: &OrgContext, intent: &str) -> String {
          {}\n\n\
          {}\n\
          =================================",
-        ctx.cost_summary, ctx.top_services, ctx.cost_trend,
-        ctx.anomalies, ctx.recommendations, ctx.budgets, ctx.forecast
+        ctx.cost_summary,
+        ctx.top_services,
+        ctx.cost_trend,
+        ctx.anomalies,
+        ctx.recommendations,
+        ctx.budgets,
+        ctx.forecast
     );
 
     let persona = "You are FinOpsMind AI, an expert FinOps cloud cost management assistant. \
@@ -283,10 +517,4 @@ fn build_system_prompt(ctx: &OrgContext, intent: &str) -> String {
     };
 
     format!("{persona}\n\n{intent_instruction}\n\n{base_context}")
-}
-
-async fn call_llm(config: &LlmConfig, system_prompt: &str, user_message: &str) -> Result<String, AppError> {
-    crate::llm::call_llm(config, system_prompt, user_message)
-        .await
-        .map_err(|e| AppError::service_unavailable(&e.to_string()))
 }

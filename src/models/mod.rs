@@ -9,6 +9,7 @@ pub mod recommendation;
 pub mod remediation;
 pub mod cloud_provider;
 pub mod policy;
+pub mod chat_message;
 
 pub use types::*;
 pub use user::*;
@@ -21,3 +22,4 @@ pub use recommendation::*;
 pub use remediation::*;
 pub use cloud_provider::*;
 pub use policy::*;
+pub use chat_message::*;

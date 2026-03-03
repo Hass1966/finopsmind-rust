@@ -8,6 +8,7 @@ pub mod users;
 pub mod organizations;
 pub mod cloud_providers;
 pub mod policies;
+pub mod chat_messages;
 
 pub use costs::*;
 pub use budgets::*;
@@ -19,3 +20,4 @@ pub use users::*;
 pub use organizations::*;
 pub use cloud_providers::*;
 pub use policies::*;
+pub use chat_messages::*;

@@ -35,7 +35,7 @@ sha2 = "0.10"
 hex = "0.4"
 
 # HTTP client for LLM calls
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }
 
 # ML
 linfa = "0.7"
@@ -58,6 +58,7 @@ anyhow = "1"
 thiserror = "2"
 dotenvy = "0.15"
 futures = "0.3"
+tokio-stream = "0.1"
 
 # Encryption
 aes-gcm = "0.10"
@@ -78,3 +79,4 @@ aws-credential-types = "1"
 
 # Azure
 reqwest-middleware = "0.4"
+bytes = "1.11.1"
