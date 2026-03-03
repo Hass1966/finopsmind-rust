@@ -7,6 +7,7 @@ use crate::db::{AnomalyRepo, BudgetRepo, CostRepo, RecommendationRepo};
 use crate::errors::AppError;
 use crate::handlers::AppState;
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct ReportParams {
     pub period: Option<String>,

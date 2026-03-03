@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, sqlx::Type)]
 #[sqlx(type_name = "varchar")]
 #[sqlx(rename_all = "lowercase")]
@@ -26,6 +27,7 @@ impl std::fmt::Display for CloudProviderType {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
@@ -58,6 +60,7 @@ impl Pagination {
         Self { page, page_size, total }
     }
 
+    #[allow(dead_code)]
     pub fn offset(&self) -> i64 {
         (self.page - 1) * self.page_size
     }
@@ -69,4 +72,5 @@ pub struct PaginatedResponse<T: Serialize> {
     pub pagination: Pagination,
 }
 
+#[allow(dead_code)]
 pub type Tags = HashMap<String, String>;

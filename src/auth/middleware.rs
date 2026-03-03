@@ -18,6 +18,7 @@ pub struct AuthState {
 }
 
 /// Extract claims from request extensions (set by auth middleware).
+#[allow(dead_code)]
 pub fn get_claims(req: &Request) -> Option<&Claims> {
     req.extensions().get::<Claims>()
 }
@@ -97,6 +98,7 @@ pub async fn auth_middleware(
 }
 
 /// Role-based access control middleware factory.
+#[allow(dead_code)]
 pub fn require_role(allowed_roles: &'static [&'static str]) -> impl Fn(Request, Next) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Response, (StatusCode, Json<ApiError>)>> + Send>> + Clone + Send {
     move |req: Request, next: Next| {
         let roles = allowed_roles;

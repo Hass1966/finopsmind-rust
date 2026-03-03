@@ -51,6 +51,7 @@ pub struct RecommendationSummary {
     pub currency: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct RecommendationQueryParams {
     pub status: Option<String>,

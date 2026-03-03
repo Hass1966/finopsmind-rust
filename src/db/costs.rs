@@ -7,6 +7,7 @@ use crate::models::{CostBreakdown, CostBreakdownItem, CostDataPoint, CostRecord,
 pub struct CostRepo;
 
 impl CostRepo {
+    #[allow(dead_code)]
     pub async fn create(pool: &PgPool, record: &CostRecord) -> Result<CostRecord, sqlx::Error> {
         sqlx::query_as::<_, CostRecord>(
             r#"INSERT INTO costs (id, organization_id, date, amount, currency, provider, service, account_id, region, resource_id, tags, estimated)

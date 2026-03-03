@@ -77,6 +77,7 @@ impl WsHub {
     }
 
     /// Send a recommendation event.
+    #[allow(dead_code)]
     pub async fn send_recommendation(&self, org_id: Uuid, data: serde_json::Value) {
         self.broadcast(WsMessage {
             msg_type: "recommendation".into(),
@@ -87,6 +88,7 @@ impl WsHub {
     }
 
     /// Send a remediation status update.
+    #[allow(dead_code)]
     pub async fn send_remediation_update(&self, org_id: Uuid, data: serde_json::Value) {
         self.broadcast(WsMessage {
             msg_type: "remediation_update".into(),
@@ -97,6 +99,7 @@ impl WsHub {
     }
 
     /// Send a policy violation event.
+    #[allow(dead_code)]
     pub async fn send_policy_violation(&self, org_id: Uuid, data: serde_json::Value) {
         self.broadcast(WsMessage {
             msg_type: "policy_violation".into(),

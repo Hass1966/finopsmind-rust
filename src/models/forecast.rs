@@ -28,6 +28,7 @@ pub struct Forecast {
     pub updated_at: DateTime<Utc>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub struct ForecastSummary {
     pub current_month_forecast: f64,
@@ -39,6 +40,7 @@ pub struct ForecastSummary {
     pub generated_at: DateTime<Utc>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct ForecastQueryParams {
     pub page: Option<i64>,

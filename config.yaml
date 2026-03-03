@@ -4,9 +4,9 @@ server:
 
 database:
   host: "localhost"
-  port: 5434
-  user: "hassan"
-  password: "finops123"
+  port: 5432
+  user: "finopsmind"
+  password: "CHANGE_ME"
   name: "finopsmind"
   max_connections: 10
 
@@ -14,10 +14,10 @@ redis:
   url: "redis://localhost:6379"
 
 auth:
-  jwt_secret: "super-secret-jwt-key-change-in-production"
+  jwt_secret: "CHANGE_ME_generate_a_strong_random_secret"
   token_expiry_hours: 24
 
-encryption_key: "finopsmind-encryption-key-32bytes!"
+encryption_key: "CHANGE_ME_exactly_32_bytes_long!"
 
 llm:
   provider: "ollama"

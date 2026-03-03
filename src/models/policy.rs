@@ -80,6 +80,7 @@ pub struct PolicySummary {
     pub by_severity: serde_json::Value,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct PolicyQueryParams {
     pub policy_type: Option<String>,

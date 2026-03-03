@@ -65,6 +65,7 @@ pub struct CostDataPoint {
     pub service: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct CostQueryParams {
     pub start_date: Option<NaiveDate>,

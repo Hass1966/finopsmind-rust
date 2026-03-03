@@ -7,6 +7,7 @@ use crate::models::{Anomaly, AnomalySummary, UpdateAnomalyRequest};
 pub struct AnomalyRepo;
 
 impl AnomalyRepo {
+    #[allow(dead_code)]
     pub async fn create(pool: &PgPool, anomaly: &Anomaly) -> Result<Anomaly, sqlx::Error> {
         sqlx::query_as::<_, Anomaly>(
             r#"INSERT INTO anomalies (id, organization_id, date, actual_amount, expected_amount, deviation, deviation_pct, score, severity, status, provider, service, account_id, region, root_cause, detected_at)

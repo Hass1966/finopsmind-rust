@@ -43,6 +43,7 @@ pub struct AnomalySummary {
     pub currency: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct AnomalyQueryParams {
     pub severity: Option<String>,
@@ -60,6 +61,7 @@ pub struct UpdateAnomalyRequest {
     pub root_cause: Option<String>,
 }
 
+#[allow(dead_code)]
 pub fn classify_severity(deviation_pct: f64) -> String {
     if deviation_pct >= 100.0 {
         "critical".into()

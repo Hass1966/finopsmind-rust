@@ -12,6 +12,7 @@ pub struct Organization {
     pub updated_at: DateTime<Utc>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrganizationSettings {
     #[serde(default = "default_currency")]
@@ -28,19 +29,24 @@ pub struct OrganizationSettings {
     pub email_recipients: Vec<String>,
 }
 
+#[allow(dead_code)]
 fn default_currency() -> String {
     "USD".into()
 }
+#[allow(dead_code)]
 fn default_timezone() -> String {
     "UTC".into()
 }
+#[allow(dead_code)]
 fn default_fiscal_year() -> i32 {
     1
 }
+#[allow(dead_code)]
 fn default_true() -> bool {
     true
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Alert {
     pub id: Uuid,

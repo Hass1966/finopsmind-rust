@@ -13,6 +13,7 @@ pub struct User {
     pub first_name: String,
     pub last_name: String,
     pub role: String,
+    #[allow(dead_code)]
     #[serde(skip_serializing)]
     pub api_key_hash: Option<String>,
     pub last_login_at: Option<DateTime<Utc>>,
@@ -22,6 +23,7 @@ pub struct User {
 }
 
 impl User {
+    #[allow(dead_code)]
     pub fn full_name(&self) -> String {
         format!("{} {}", self.first_name, self.last_name).trim().to_string()
     }

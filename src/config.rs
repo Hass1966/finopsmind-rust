@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::env;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct AppConfig {
@@ -26,6 +27,8 @@ pub struct DatabaseConfig {
     pub name: String,
     #[serde(default = "default_max_connections")]
     pub max_connections: u32,
+    #[serde(default)]
+    pub url: Option<String>,
 }
 
 fn default_max_connections() -> u32 {
@@ -33,7 +36,10 @@ fn default_max_connections() -> u32 {
 }
 
 impl DatabaseConfig {
-    pub fn url(&self) -> String {
+    pub fn connection_url(&self) -> String {
+        if let Some(ref url) = self.url {
+            return url.clone();
+        }
         format!(
             "postgres://{}:{}@{}:{}/{}",
             self.user, self.password, self.host, self.port, self.name
@@ -76,6 +82,7 @@ pub struct JobsConfig {
     pub forecast_interval_secs: u64,
     #[serde(default = "default_budget_check")]
     pub budget_check_interval_secs: u64,
+    #[allow(dead_code)]
     #[serde(default = "default_recommendation")]
     pub recommendation_interval_secs: u64,
 }
@@ -98,12 +105,49 @@ fn default_recommendation() -> u64 {
 
 impl AppConfig {
     pub fn load() -> anyhow::Result<Self> {
+        let _ = dotenvy::dotenv();
+
         let config = config::Config::builder()
             .add_source(config::File::with_name("config").required(false))
             .add_source(config::Environment::with_prefix("FINOPS").separator("__"))
             .build()?;
 
-        let app_config: AppConfig = config.try_deserialize()?;
+        let mut app_config: AppConfig = config.try_deserialize()?;
+
+        // Apply environment variable overrides with the exact names requested
+        if let Ok(val) = env::var("DATABASE_URL") {
+            app_config.database.url = Some(val);
+        }
+        if let Ok(val) = env::var("REDIS_URL") {
+            app_config.redis.url = val;
+        }
+        if let Ok(val) = env::var("AUTH__JWT_SECRET") {
+            app_config.auth.jwt_secret = val;
+        }
+        if let Ok(val) = env::var("AUTH__ENCRYPTION_KEY") {
+            app_config.encryption_key = val;
+        }
+        if let Ok(val) = env::var("LLM__PROVIDER") {
+            app_config.llm.provider = val;
+        }
+        if let Ok(val) = env::var("LLM__URL") {
+            app_config.llm.url = val;
+        }
+        if let Ok(val) = env::var("LLM__MODEL") {
+            app_config.llm.model = val;
+        }
+        if let Ok(val) = env::var("LLM__API_KEY") {
+            app_config.llm.api_key = val;
+        }
+        if let Ok(val) = env::var("SERVER__HOST") {
+            app_config.server.host = val;
+        }
+        if let Ok(val) = env::var("SERVER__PORT") {
+            if let Ok(port) = val.parse::<u16>() {
+                app_config.server.port = port;
+            }
+        }
+
         Ok(app_config)
     }
 }

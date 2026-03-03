@@ -73,6 +73,7 @@ impl RecommendationRepo {
         .await
     }
 
+    #[allow(dead_code)]
     pub async fn create(pool: &PgPool, rec: &Recommendation) -> Result<Recommendation, sqlx::Error> {
         sqlx::query_as::<_, Recommendation>(
             r#"INSERT INTO recommendations (id, organization_id, type, provider, account_id, region, resource_id, resource_type,

@@ -8,6 +8,7 @@ use crate::db::{AnomalyRepo, BudgetRepo, CostRepo, ForecastRepo, RecommendationR
 use crate::errors::AppError;
 use crate::handlers::AppState;
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct ChatRequest {
     pub message: String,
@@ -77,7 +78,7 @@ fn detect_intent(message: &str) -> String {
 async fn gather_context(
     state: &AppState,
     org_id: uuid::Uuid,
-    intent: &str,
+    _intent: &str,
 ) -> OrgContext {
     let now = Utc::now().date_naive();
     let days_30_ago = now - Duration::days(30);

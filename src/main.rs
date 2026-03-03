@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 mod config;
 mod errors;
 mod models;
@@ -45,7 +43,7 @@ async fn main() -> anyhow::Result<()> {
     // Connect to PostgreSQL
     let pool = PgPoolOptions::new()
         .max_connections(config.database.max_connections)
-        .connect(&config.database.url())
+        .connect(&config.database.connection_url())
         .await?;
     tracing::info!("Connected to PostgreSQL");
 

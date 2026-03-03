@@ -56,6 +56,7 @@ impl ForecastRepo {
         .await
     }
 
+    #[allow(dead_code)]
     pub async fn get_by_id(pool: &PgPool, org_id: Uuid, id: Uuid) -> Result<Forecast, sqlx::Error> {
         sqlx::query_as::<_, Forecast>(
             "SELECT * FROM forecasts WHERE id = $1 AND organization_id = $2"
