@@ -98,6 +98,10 @@ async fn run_cost_sync(pool: &PgPool, ws_hub: &WsHub, encryption_key: &str) -> a
     let start_date = end_date - chrono::Duration::days(7); // Sync last 7 days
 
     for provider in providers {
+        if provider.status == "credentials_error" {
+            continue;
+        }
+
         let creds_enc = match &provider.credentials {
             Some(c) => c,
             None => continue,
@@ -107,6 +111,12 @@ async fn run_cost_sync(pool: &PgPool, ws_hub: &WsHub, encryption_key: &str) -> a
             Ok(b) => b,
             Err(e) => {
                 error!(provider_id = %provider.id, "Failed to decrypt credentials: {e}");
+                CloudProviderRepo::update_status(
+                    pool,
+                    provider.id,
+                    "credentials_error",
+                    Some("Decryption failed — re-save credentials via PUT /api/v1/providers/:id"),
+                ).await.ok();
                 continue;
             }
         };

@@ -53,7 +53,13 @@ async fn main() -> anyhow::Result<()> {
     sqlx::raw_sql(include_str!("../migrations/001_initial_schema.sql"))
         .execute(&pool)
         .await?;
+    sqlx::raw_sql(include_str!("../migrations/002_chat_messages.sql"))
+        .execute(&pool)
+        .await?;
     tracing::info!("Database migrations applied");
+
+    // Validate provider credentials can be decrypted with current key
+    validate_provider_credentials(&pool, &config.encryption_key).await;
 
     // Connect to Redis
     let redis_client = redis::Client::open(config.redis.url.as_str())?;
@@ -153,6 +159,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/reports/export/json", get(handlers::reports::export_json))
         // Chat
         .route("/api/v1/chat", post(handlers::chat::chat))
+        .route("/api/v1/chat/history", get(handlers::chat::get_history).delete(handlers::chat::clear_history))
         // Settings
         .route("/api/v1/settings", get(handlers::settings::get_settings).put(handlers::settings::update_settings))
         // Allocations
@@ -209,4 +216,40 @@ async fn shutdown_signal() {
     }
 
     tracing::info!("Shutdown signal received");
+}
+
+/// On startup, test-decrypt every provider's credentials.
+/// If decryption fails (key mismatch), mark the provider so the
+/// background sync job skips it instead of logging errors every cycle.
+async fn validate_provider_credentials(pool: &sqlx::PgPool, encryption_key: &str) {
+    let providers = match db::CloudProviderRepo::get_all_enabled(pool).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!("Could not load providers for credential check: {e}");
+            return;
+        }
+    };
+
+    for provider in providers {
+        let creds = match &provider.credentials {
+            Some(c) => c,
+            None => continue,
+        };
+
+        if let Err(e) = crypto::decrypt(creds, encryption_key) {
+            tracing::warn!(
+                provider_id = %provider.id,
+                provider_name = %provider.name,
+                "Credential decryption failed ({e}) — marking provider as credentials_error. \
+                 Re-save credentials via PUT /api/v1/providers/{}", provider.id,
+            );
+            let _ = db::CloudProviderRepo::update_status(
+                pool,
+                provider.id,
+                "credentials_error",
+                Some("Decryption failed on startup — encryption key may have changed. Re-save credentials."),
+            )
+            .await;
+        }
+    }
 }

@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::auth::Claims;
-use crate::config::LlmConfig;
 use crate::db::{
     AnomalyRepo, BudgetRepo, ChatMessageRepo, CostRepo, ForecastRepo, RecommendationRepo,
 };
@@ -20,11 +19,11 @@ use crate::handlers::AppState;
 use crate::llm::LlmMessage;
 use crate::models::{ChatHistoryParams, ChatMessage, PaginatedResponse, Pagination};
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct ChatRequest {
     pub message: String,
     #[serde(default)]
+    #[allow(dead_code)]
     pub context: Option<serde_json::Value>,
     #[serde(default)]
     pub stream: bool,
