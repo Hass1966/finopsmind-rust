@@ -1,3 +1,5 @@
+pub mod recommendations;
+
 use sqlx::PgPool;
 use tokio::time::{interval, Duration};
 use tracing::{info, error};
@@ -65,6 +67,21 @@ pub fn spawn_background_jobs(
             info!("Running budget check job");
             if let Err(e) = run_budget_check(&pool3, &ws3).await {
                 error!("Budget check job failed: {e}");
+            }
+        }
+    });
+
+    // Recommendation rules engine job
+    let pool4 = pool.clone();
+    let enc_key4 = encryption_key.clone();
+    tokio::spawn(async move {
+        let mut ticker = interval(Duration::from_secs(config.recommendation_interval_secs));
+        loop {
+            ticker.tick().await;
+            info!("Running recommendation rules engine");
+            match recommendations::run_recommendation_scan(&pool4, &enc_key4).await {
+                Ok(count) => info!(count, "Recommendation scan completed"),
+                Err(e) => error!("Recommendation scan failed: {e}"),
             }
         }
     });

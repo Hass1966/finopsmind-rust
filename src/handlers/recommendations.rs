@@ -84,15 +84,21 @@ pub async fn get_summary(
 }
 
 pub async fn generate(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Extension(_claims): Extension<Claims>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    // In a full implementation this would run the recommendation rules engine.
-    // For now, return a message indicating the job has been triggered.
-    Ok(Json(serde_json::json!({
-        "message": "Recommendation generation triggered",
-        "status": "running"
-    })))
+    match crate::jobs::recommendations::run_recommendation_scan(&state.pool, &state.encryption_key)
+        .await
+    {
+        Ok(count) => Ok(Json(serde_json::json!({
+            "message": "Recommendation generation completed",
+            "status": "completed",
+            "new_recommendations": count
+        }))),
+        Err(e) => Err(AppError::internal(format!(
+            "Recommendation generation failed: {e}"
+        ))),
+    }
 }
 
 pub async fn get_terraform(

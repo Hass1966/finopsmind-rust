@@ -82,7 +82,6 @@ pub struct JobsConfig {
     pub forecast_interval_secs: u64,
     #[serde(default = "default_budget_check")]
     pub budget_check_interval_secs: u64,
-    #[allow(dead_code)]
     #[serde(default = "default_recommendation")]
     pub recommendation_interval_secs: u64,
 }

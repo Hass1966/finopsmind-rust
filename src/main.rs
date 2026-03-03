@@ -6,6 +6,7 @@ mod ml;
 mod auth;
 mod handlers;
 mod jobs;
+mod rules;
 mod ws;
 mod crypto;
 mod cloud;
