@@ -3,6 +3,7 @@ use chrono::{Utc, Duration};
 use serde::Deserialize;
 
 use crate::auth::Claims;
+use crate::carbon::CarbonReport;
 use crate::db::{AnomalyRepo, BudgetRepo, CostRepo, RecommendationRepo};
 use crate::errors::AppError;
 use crate::handlers::AppState;
@@ -109,4 +110,25 @@ pub async fn export_json(
         "summary": cost_summary,
         "trend": trend,
     })))
+}
+
+pub async fn carbon_report(
+    State(state): State<AppState>,
+    Query(params): Query<ReportParams>,
+    Extension(claims): Extension<Claims>,
+) -> Result<Json<CarbonReport>, AppError> {
+    let end = params.end_date.unwrap_or_else(|| Utc::now().date_naive());
+    let start = params.start_date.unwrap_or_else(|| end - Duration::days(90));
+
+    let region_spend = CostRepo::get_spend_by_region(&state.pool, claims.org_id, start, end)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+
+    let monthly_spend =
+        CostRepo::get_monthly_spend_by_region(&state.pool, claims.org_id, start, end)
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?;
+
+    let report = crate::carbon::estimate(&region_spend, &monthly_spend, start, end);
+    Ok(Json(report))
 }

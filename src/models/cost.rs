@@ -65,6 +65,17 @@ pub struct CostDataPoint {
     pub service: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiCostSummary {
+    pub total_ai_spend: f64,
+    pub currency: String,
+    pub start_date: NaiveDate,
+    pub end_date: NaiveDate,
+    pub by_service: Vec<CostBreakdownItem>,
+    pub trend: Vec<CostDataPoint>,
+    pub ai_share_pct: f64,
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct CostQueryParams {

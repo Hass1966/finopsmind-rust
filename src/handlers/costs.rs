@@ -5,7 +5,7 @@ use crate::auth::Claims;
 use crate::cache;
 use crate::db::CostRepo;
 use crate::errors::AppError;
-use crate::models::{CostBreakdown, CostQueryParams, CostSummary, CostTrend};
+use crate::models::{AiCostSummary, CostBreakdown, CostQueryParams, CostSummary, CostTrend};
 use crate::handlers::AppState;
 
 pub async fn get_summary(
@@ -76,6 +76,28 @@ pub async fn get_breakdown(
     .map_err(|e| AppError::internal(format!("Cache/query error: {e}")))?;
 
     Ok(Json(breakdown))
+}
+
+pub async fn get_ai_costs(
+    State(state): State<AppState>,
+    Query(params): Query<CostQueryParams>,
+    Extension(claims): Extension<Claims>,
+) -> Result<Json<AiCostSummary>, AppError> {
+    let end = params.end_date.unwrap_or_else(|| Utc::now().date_naive());
+    let start = params.start_date.unwrap_or_else(|| end - Duration::days(30));
+
+    let cache_key = format!("costs:{}:ai:{}:{}", claims.org_id, start, end);
+    let pool = state.pool.clone();
+
+    let summary = cache::get_or_set(&state.redis, &cache_key, 300, || async {
+        CostRepo::get_ai_summary(&pool, claims.org_id, start, end)
+            .await
+            .map_err(|e| anyhow::anyhow!(e))
+    })
+    .await
+    .map_err(|e| AppError::internal(format!("Cache/query error: {e}")))?;
+
+    Ok(Json(summary))
 }
 
 pub async fn export_csv(

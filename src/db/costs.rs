@@ -2,7 +2,7 @@ use chrono::NaiveDate;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::models::{CostBreakdown, CostBreakdownItem, CostDataPoint, CostRecord, CostSummary, CostTrend};
+use crate::models::{AiCostSummary, CostBreakdown, CostBreakdownItem, CostDataPoint, CostRecord, CostSummary, CostTrend};
 
 pub struct CostRepo;
 
@@ -257,5 +257,155 @@ impl CostRepo {
         .bind(end_date)
         .fetch_all(pool)
         .await
+    }
+
+    /// Region-level spend totals for carbon estimation.
+    pub async fn get_spend_by_region(
+        pool: &PgPool,
+        org_id: Uuid,
+        start_date: NaiveDate,
+        end_date: NaiveDate,
+    ) -> Result<Vec<(String, f64)>, sqlx::Error> {
+        sqlx::query_as(
+            "SELECT region, COALESCE(SUM(amount::float8), 0) as total \
+             FROM costs \
+             WHERE organization_id = $1 AND date >= $2 AND date <= $3 \
+             GROUP BY region ORDER BY total DESC"
+        )
+        .bind(org_id)
+        .bind(start_date)
+        .bind(end_date)
+        .fetch_all(pool)
+        .await
+    }
+
+    /// Monthly spend per region for carbon trend.
+    pub async fn get_monthly_spend_by_region(
+        pool: &PgPool,
+        org_id: Uuid,
+        start_date: NaiveDate,
+        end_date: NaiveDate,
+    ) -> Result<Vec<(String, String, f64)>, sqlx::Error> {
+        sqlx::query_as(
+            "SELECT to_char(date, 'YYYY-MM') as month, region, COALESCE(SUM(amount::float8), 0) as total \
+             FROM costs \
+             WHERE organization_id = $1 AND date >= $2 AND date <= $3 \
+             GROUP BY month, region ORDER BY month, total DESC"
+        )
+        .bind(org_id)
+        .bind(start_date)
+        .bind(end_date)
+        .fetch_all(pool)
+        .await
+    }
+
+    /// AI/ML and GPU cost summary: filters for AI services and GPU instance types.
+    pub async fn get_ai_summary(
+        pool: &PgPool,
+        org_id: Uuid,
+        start_date: NaiveDate,
+        end_date: NaiveDate,
+    ) -> Result<AiCostSummary, sqlx::Error> {
+        let ai_filter = r#"
+            organization_id = $1 AND date >= $2 AND date <= $3
+            AND (
+                service ILIKE '%SageMaker%'
+                OR service ILIKE '%Bedrock%'
+                OR service ILIKE '%Rekognition%'
+                OR service ILIKE '%Comprehend%'
+                OR service ILIKE '%Textract%'
+                OR service ILIKE '%Polly%'
+                OR service ILIKE '%Transcribe%'
+                OR resource_id ~* '(p3|p4d?|g4dn|g5|inf1|trn1)\.'
+            )
+        "#;
+
+        // Total AI spend
+        let total_query = format!(
+            "SELECT COALESCE(SUM(amount::float8), 0) FROM costs WHERE {ai_filter}"
+        );
+        let ai_total: (Option<f64>,) = sqlx::query_as(&total_query)
+            .bind(org_id)
+            .bind(start_date)
+            .bind(end_date)
+            .fetch_one(pool)
+            .await?;
+        let total_ai_spend = ai_total.0.unwrap_or(0.0);
+
+        // Overall spend for share calculation
+        let overall_total: (Option<f64>,) = sqlx::query_as(
+            "SELECT COALESCE(SUM(amount::float8), 0) FROM costs WHERE organization_id = $1 AND date >= $2 AND date <= $3"
+        )
+        .bind(org_id)
+        .bind(start_date)
+        .bind(end_date)
+        .fetch_one(pool)
+        .await?;
+        let overall = overall_total.0.unwrap_or(0.0);
+
+        // Breakdown by service
+        let svc_query = format!(
+            "SELECT service, COALESCE(SUM(amount::float8), 0) as total \
+             FROM costs WHERE {ai_filter} \
+             GROUP BY service ORDER BY total DESC"
+        );
+        let svc_rows: Vec<(String, f64)> = sqlx::query_as(&svc_query)
+            .bind(org_id)
+            .bind(start_date)
+            .bind(end_date)
+            .fetch_all(pool)
+            .await?;
+
+        let by_service: Vec<CostBreakdownItem> = svc_rows
+            .into_iter()
+            .map(|(name, amount)| CostBreakdownItem {
+                name,
+                percentage: if total_ai_spend > 0.0 {
+                    (amount / total_ai_spend) * 100.0
+                } else {
+                    0.0
+                },
+                amount,
+            })
+            .collect();
+
+        // Daily trend
+        let trend_query = format!(
+            "SELECT date, COALESCE(SUM(amount::float8), 0) as total \
+             FROM costs WHERE {ai_filter} \
+             GROUP BY date ORDER BY date"
+        );
+        let trend_rows: Vec<(NaiveDate, f64)> = sqlx::query_as(&trend_query)
+            .bind(org_id)
+            .bind(start_date)
+            .bind(end_date)
+            .fetch_all(pool)
+            .await?;
+
+        let trend: Vec<CostDataPoint> = trend_rows
+            .into_iter()
+            .map(|(date, amount)| CostDataPoint {
+                date,
+                amount,
+                provider: None,
+                service: None,
+            })
+            .collect();
+
+        let ai_share_pct = if overall > 0.0 {
+            (total_ai_spend / overall) * 100.0
+        } else {
+            0.0
+        };
+
+        Ok(AiCostSummary {
+            total_ai_spend,
+            currency: "USD".into(),
+            start_date,
+            end_date,
+            by_service,
+            trend,
+            ai_share_pct,
+        })
     }
 }

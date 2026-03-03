@@ -12,6 +12,7 @@ mod crypto;
 mod cloud;
 mod llm;
 mod cache;
+mod carbon;
 
 use std::sync::Arc;
 use axum::{
@@ -111,6 +112,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/costs/summary", get(handlers::costs::get_summary))
         .route("/api/v1/costs/trend", get(handlers::costs::get_trend))
         .route("/api/v1/costs/breakdown", get(handlers::costs::get_breakdown))
+        .route("/api/v1/costs/ai", get(handlers::costs::get_ai_costs))
         .route("/api/v1/costs/export", get(handlers::costs::export_csv))
         // Budgets
         .route("/api/v1/budgets", get(handlers::budgets::list).post(handlers::budgets::create))
@@ -155,6 +157,7 @@ async fn main() -> anyhow::Result<()> {
         // Reports
         .route("/api/v1/reports/executive-summary", get(handlers::reports::executive_summary))
         .route("/api/v1/reports/comparison", get(handlers::reports::cost_comparison))
+        .route("/api/v1/reports/carbon", get(handlers::reports::carbon_report))
         .route("/api/v1/reports/export/csv", get(handlers::reports::export_csv))
         .route("/api/v1/reports/export/json", get(handlers::reports::export_json))
         // Chat
