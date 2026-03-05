@@ -147,6 +147,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/remediations/:id/reject", post(handlers::remediations::reject))
         .route("/api/v1/remediations/:id/cancel", post(handlers::remediations::cancel))
         .route("/api/v1/remediations/:id/rollback", post(handlers::remediations::rollback))
+        .route("/api/v1/remediations/:id/push-to-pipeline", post(handlers::remediations::push_to_pipeline))
         .route("/api/v1/remediations/rules", get(handlers::remediations::list_rules).post(handlers::remediations::create_rule))
         .route("/api/v1/remediations/rules/:id", put(handlers::remediations::update_rule).delete(handlers::remediations::delete_rule))
         // Policies

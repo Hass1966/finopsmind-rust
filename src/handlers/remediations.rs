@@ -3,10 +3,11 @@ use axum::{
     Extension, Json,
 };
 use chrono::Utc;
+use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::auth::Claims;
-use crate::db::RemediationRepo;
+use crate::db::{RecommendationRepo, RemediationRepo};
 use crate::errors::AppError;
 use crate::models::*;
 use crate::handlers::AppState;
@@ -273,4 +274,176 @@ pub async fn delete_rule(
 ) -> Result<Json<serde_json::Value>, AppError> {
     RemediationRepo::delete_rule(&state.pool, claims.org_id, id).await?;
     Ok(Json(serde_json::json!({"message": "Rule deleted"})))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PushToPipelineRequest {
+    pub github_token: String,
+    pub repo_owner: String,
+    pub repo_name: String,
+    pub base_branch: String,
+}
+
+pub async fn push_to_pipeline(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Extension(claims): Extension<Claims>,
+    Json(req): Json<PushToPipelineRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // Get the remediation action
+    let action = RemediationRepo::get_action(&state.pool, claims.org_id, id)
+        .await
+        .map_err(|_| AppError::not_found("Remediation", &id.to_string()))?;
+
+    // Get the linked recommendation's terraform_code
+    let rec_id = action
+        .recommendation_id
+        .ok_or_else(|| AppError::bad_request("Remediation has no linked recommendation"))?;
+
+    let recommendation = RecommendationRepo::get_by_id(&state.pool, claims.org_id, rec_id)
+        .await
+        .map_err(|_| AppError::not_found("Recommendation", &rec_id.to_string()))?;
+
+    let terraform_code = recommendation
+        .terraform_code
+        .ok_or_else(|| AppError::bad_request("Recommendation has no terraform code"))?;
+
+    let client = reqwest::Client::new();
+    let api_base = format!(
+        "https://api.github.com/repos/{}/{}",
+        req.repo_owner, req.repo_name
+    );
+
+    // Get the base branch SHA
+    let branch_resp = client
+        .get(format!("{api_base}/git/ref/heads/{}", req.base_branch))
+        .header("Authorization", format!("Bearer {}", req.github_token))
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "finopsmind")
+        .send()
+        .await
+        .map_err(|e| AppError::internal(format!("GitHub API error: {e}")))?;
+
+    if !branch_resp.status().is_success() {
+        let status = branch_resp.status();
+        let body = branch_resp.text().await.unwrap_or_default();
+        return Err(AppError::internal(format!(
+            "Failed to get base branch: {status} {body}"
+        )));
+    }
+
+    let branch_data: serde_json::Value = branch_resp
+        .json()
+        .await
+        .map_err(|e| AppError::internal(format!("Failed to parse branch response: {e}")))?;
+
+    let base_sha = branch_data["object"]["sha"]
+        .as_str()
+        .ok_or_else(|| AppError::internal("Missing SHA in branch response"))?
+        .to_string();
+
+    // Create a new branch: finopsmind/fix-{first 8 chars of remediation id}
+    let short_id = &id.to_string()[..8];
+    let new_branch = format!("finopsmind/fix-{short_id}");
+
+    let create_ref_resp = client
+        .post(format!("{api_base}/git/refs"))
+        .header("Authorization", format!("Bearer {}", req.github_token))
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "finopsmind")
+        .json(&serde_json::json!({
+            "ref": format!("refs/heads/{new_branch}"),
+            "sha": base_sha,
+        }))
+        .send()
+        .await
+        .map_err(|e| AppError::internal(format!("GitHub API error: {e}")))?;
+
+    if !create_ref_resp.status().is_success() {
+        let status = create_ref_resp.status();
+        let body = create_ref_resp.text().await.unwrap_or_default();
+        return Err(AppError::internal(format!(
+            "Failed to create branch: {status} {body}"
+        )));
+    }
+
+    // Commit the terraform code as a .tf file
+    let file_path = format!("finopsmind-remediation-{short_id}.tf");
+    let encoded_content = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        terraform_code.as_bytes(),
+    );
+
+    let create_file_resp = client
+        .put(format!("{api_base}/contents/{file_path}"))
+        .header("Authorization", format!("Bearer {}", req.github_token))
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "finopsmind")
+        .json(&serde_json::json!({
+            "message": format!("Add terraform remediation for {}", action.resource_id),
+            "content": encoded_content,
+            "branch": new_branch,
+        }))
+        .send()
+        .await
+        .map_err(|e| AppError::internal(format!("GitHub API error: {e}")))?;
+
+    if !create_file_resp.status().is_success() {
+        let status = create_file_resp.status();
+        let body = create_file_resp.text().await.unwrap_or_default();
+        return Err(AppError::internal(format!(
+            "Failed to commit file: {status} {body}"
+        )));
+    }
+
+    // Open a pull request
+    let pr_resp = client
+        .post(format!("{api_base}/pulls"))
+        .header("Authorization", format!("Bearer {}", req.github_token))
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "finopsmind")
+        .json(&serde_json::json!({
+            "title": format!("FinOpsMind: Remediate {}", action.resource_id),
+            "body": format!(
+                "## Automated Remediation\n\n\
+                 **Resource:** {}\n\
+                 **Type:** {}\n\
+                 **Region:** {}\n\
+                 **Estimated Savings:** ${:.2}/mo\n\n\
+                 Generated by FinOpsMind remediation pipeline.",
+                action.resource_id,
+                action.resource_type,
+                action.region,
+                action.estimated_savings,
+            ),
+            "head": new_branch,
+            "base": req.base_branch,
+        }))
+        .send()
+        .await
+        .map_err(|e| AppError::internal(format!("GitHub API error: {e}")))?;
+
+    if !pr_resp.status().is_success() {
+        let status = pr_resp.status();
+        let body = pr_resp.text().await.unwrap_or_default();
+        return Err(AppError::internal(format!(
+            "Failed to create PR: {status} {body}"
+        )));
+    }
+
+    let pr_data: serde_json::Value = pr_resp
+        .json()
+        .await
+        .map_err(|e| AppError::internal(format!("Failed to parse PR response: {e}")))?;
+
+    let pr_url = pr_data["html_url"]
+        .as_str()
+        .unwrap_or("unknown")
+        .to_string();
+
+    Ok(Json(serde_json::json!({
+        "pr_url": pr_url,
+        "branch": new_branch,
+        "file": file_path,
+    })))
 }

@@ -1,5 +1,6 @@
 pub mod aws;
 pub mod azure;
+pub mod gcp;
 
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};

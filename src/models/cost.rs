@@ -28,6 +28,7 @@ pub struct CostSummary {
     pub start_date: NaiveDate,
     pub end_date: NaiveDate,
     pub by_service: Vec<CostBreakdownItem>,
+    pub by_provider: Vec<CostBreakdownItem>,
     pub previous_period_cost: Option<f64>,
     pub change_pct: Option<f64>,
 }

@@ -15,6 +15,7 @@ use crate::rules::{
     missing_ri::MissingRiRule,
     s3_lifecycle::S3LifecycleRule,
     idle_eip::IdleEipRule,
+    serverless_migration::ServerlessMigrationRule,
     NewRecommendation,
     RuleEngine,
 };
@@ -63,6 +64,7 @@ pub async fn run_recommendation_scan(pool: &PgPool, encryption_key: &str) -> any
             ("missing-ri", Box::new(MissingRiRule)),
             ("s3-lifecycle", Box::new(S3LifecycleRule)),
             ("idle-eip", Box::new(IdleEipRule)),
+            ("serverless-migration", Box::new(ServerlessMigrationRule)),
         ];
 
         let mut all_new: Vec<NewRecommendation> = Vec::new();

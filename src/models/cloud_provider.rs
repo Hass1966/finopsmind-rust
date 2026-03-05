@@ -49,3 +49,9 @@ pub struct AzureCredentials {
     pub client_secret: String,
     pub subscription_id: String,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GcpCredentials {
+    pub project_id: String,
+    pub service_account_json: String,
+}

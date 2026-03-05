@@ -96,6 +96,25 @@ impl CostRepo {
             })
             .collect();
 
+        // By provider breakdown
+        let provider_rows: Vec<(String, f64)> = sqlx::query_as(
+            "SELECT provider, COALESCE(SUM(amount::float8), 0) as total FROM costs WHERE organization_id = $1 AND date >= $2 AND date <= $3 GROUP BY provider ORDER BY total DESC"
+        )
+        .bind(org_id)
+        .bind(start_date)
+        .bind(end_date)
+        .fetch_all(pool)
+        .await?;
+
+        let by_provider: Vec<CostBreakdownItem> = provider_rows
+            .into_iter()
+            .map(|(name, amount)| CostBreakdownItem {
+                name,
+                amount,
+                percentage: if total_cost > 0.0 { (amount / total_cost) * 100.0 } else { 0.0 },
+            })
+            .collect();
+
         // Previous period for comparison
         let days = (end_date - start_date).num_days();
         let prev_start = start_date - chrono::Duration::days(days);
@@ -123,6 +142,7 @@ impl CostRepo {
             start_date,
             end_date,
             by_service,
+            by_provider,
             previous_period_cost: Some(prev_cost),
             change_pct,
         })

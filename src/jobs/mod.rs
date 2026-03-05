@@ -9,7 +9,7 @@ use chrono::{Utc, NaiveDate};
 use crate::config::{JobsConfig, LlmConfig};
 use crate::db::{CostRepo, BudgetRepo, AnomalyRepo, ForecastRepo, CloudProviderRepo};
 use crate::ml;
-use crate::models::{Anomaly, Forecast, ForecastPoint, CostRecord, AwsCredentials, AzureCredentials};
+use crate::models::{Anomaly, Forecast, ForecastPoint, CostRecord, AwsCredentials, AzureCredentials, GcpCredentials};
 use crate::ws::WsHub;
 
 pub fn spawn_background_jobs(
@@ -160,6 +160,23 @@ async fn run_cost_sync(pool: &PgPool, ws_hub: &WsHub, encryption_key: &str) -> a
                     Ok(items) => items,
                     Err(e) => {
                         error!(provider_id = %provider.id, "Azure sync error: {e}");
+                        CloudProviderRepo::update_status(pool, provider.id, "failed", Some(&e.to_string())).await.ok();
+                        continue;
+                    }
+                }
+            }
+            "gcp" => {
+                let gcp_creds: GcpCredentials = match serde_json::from_value(creds_json) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        error!(provider_id = %provider.id, "Invalid GCP creds: {e}");
+                        continue;
+                    }
+                };
+                match crate::cloud::gcp::sync_costs(&gcp_creds, start_date, end_date).await {
+                    Ok(items) => items,
+                    Err(e) => {
+                        error!(provider_id = %provider.id, "GCP sync error: {e}");
                         CloudProviderRepo::update_status(pool, provider.id, "failed", Some(&e.to_string())).await.ok();
                         continue;
                     }

@@ -6,6 +6,7 @@ pub mod idle_elb;
 pub mod missing_ri;
 pub mod s3_lifecycle;
 pub mod idle_eip;
+pub mod serverless_migration;
 
 use std::future::Future;
 use std::pin::Pin;

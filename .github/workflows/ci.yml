@@ -16,8 +16,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check
+      - run: cargo clippy -- -D warnings
 
   test:
     name: Test
@@ -28,16 +30,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test
 
-  clippy:
-    name: Clippy
+  build:
+    name: Build Release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy -- -D warnings
+      - run: cargo build --release
 
   fmt:
     name: Format
